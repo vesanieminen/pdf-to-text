@@ -25,7 +25,8 @@ python3 pdf_to_text.py /path/to/file.pdf
 ```
 
 By default, output is written next to the input file with the same name and `.txt` extension.
-Default OCR mode is `auto`, which OCRs pages where little/no embedded text is found.
+Default OCR mode is `auto`, which OCRs pages where little/no embedded text is found
+or where page images exist, then merges OCR content with embedded PDF text.
 
 ### Custom output path
 

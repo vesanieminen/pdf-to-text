@@ -7,6 +7,7 @@ Supports OCR for scanned/image-only PDFs.
 from __future__ import annotations
 
 import argparse
+from difflib import SequenceMatcher
 from pathlib import Path
 
 
@@ -72,12 +73,60 @@ def _ocr_pdf_page(input_pdf: Path, page_index: int, language: str) -> str:
     return ocr_text
 
 
-def _should_ocr(page_text: str, ocr_mode: str, min_chars: int) -> bool:
+def _normalize_line(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _merge_page_text(native_text: str, ocr_text: str) -> str:
+    native_text = native_text.strip()
+    ocr_text = ocr_text.strip()
+
+    if not native_text:
+        return ocr_text
+    if not ocr_text:
+        return native_text
+
+    similarity = SequenceMatcher(
+        None, _normalize_line(native_text), _normalize_line(ocr_text)
+    ).ratio()
+    if similarity > 0.9:
+        return native_text if len(native_text) >= len(ocr_text) else ocr_text
+
+    existing = {_normalize_line(line) for line in native_text.splitlines() if line.strip()}
+    additions: list[str] = []
+    for line in ocr_text.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        normalized = _normalize_line(clean)
+        if len(normalized) < 3:
+            continue
+        if normalized in existing:
+            continue
+        additions.append(clean)
+        existing.add(normalized)
+
+    if not additions:
+        return native_text
+    return f"{native_text}\n\n[OCR additions]\n" + "\n".join(additions)
+
+
+def _page_has_images(page: object) -> bool:
+    try:
+        images = getattr(page, "images", None)
+        return bool(images)
+    except Exception:
+        return False
+
+
+def _should_ocr(
+    page_text: str, ocr_mode: str, min_chars: int, has_images: bool
+) -> bool:
     if ocr_mode == "force":
         return True
     if ocr_mode == "off":
         return False
-    return len("".join(page_text.split())) < min_chars
+    return len("".join(page_text.split())) < min_chars or has_images
 
 
 def extract_pdf_text(
@@ -94,13 +143,22 @@ def extract_pdf_text(
 
     chunks: list[str] = []
     for index, page in enumerate(reader.pages, start=1):
-        page_text = page.extract_text() or ""
-        if _should_ocr(page_text, ocr_mode=ocr_mode, min_chars=min_chars):
-            page_text = _ocr_pdf_page(
+        native_text = page.extract_text() or ""
+        has_images = _page_has_images(page)
+        if _should_ocr(
+            native_text,
+            ocr_mode=ocr_mode,
+            min_chars=min_chars,
+            has_images=has_images,
+        ):
+            ocr_text = _ocr_pdf_page(
                 input_pdf=input_pdf,
                 page_index=index - 1,
                 language=ocr_language,
             )
+            page_text = _merge_page_text(native_text=native_text, ocr_text=ocr_text)
+        else:
+            page_text = native_text
         chunks.append(f"\n\n--- Page {index} ---\n\n{page_text}")
 
     return "".join(chunks).lstrip()
